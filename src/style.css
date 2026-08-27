@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Inter:wght@500;700;900&display=swap');
+
+:root { font-family: Inter, Arial, sans-serif; color: #f5f8ff; background: #080d18; font-synthesis: none; }
+* { box-sizing: border-box; }
+html, body, #app, #canvas-host { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+button { font: inherit; }
+canvas { display: block; }
+.hidden { display: none !important; }
+.vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(circle at center, transparent 55%, rgba(5,9,18,.38)); z-index: 2; }
+.overlay { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(115deg, rgba(5,10,19,.9), rgba(6,15,27,.42)); backdrop-filter: blur(5px); }
+.menu-overlay::before { content: ''; position: absolute; width: 68vw; height: 68vw; max-width: 900px; max-height: 900px; border: 1px solid rgba(73,233,255,.12); border-radius: 50%; box-shadow: 0 0 100px rgba(23,205,255,.08) inset; animation: spin 28s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.eyebrow { color: #48e7ff; font: 700 12px/1 'Chakra Petch', sans-serif; letter-spacing: .32em; text-transform: uppercase; margin-bottom: 14px; }
+h1 { position: relative; margin: 0; font: 900 clamp(56px, 9vw, 124px)/.86 Inter, sans-serif; letter-spacing: -.085em; filter: drop-shadow(0 12px 30px rgba(0,0,0,.3)); }
+h1 span { color: #48e7ff; }
+.tagline { color: #b3bed1; margin: 22px 0 32px; font-size: 14px; }
+.primary, .secondary { position: relative; z-index: 1; border: 0; cursor: pointer; min-width: 280px; transition: transform .16s ease, box-shadow .16s ease; }
+.primary { display: flex; align-items: center; justify-content: space-between; padding: 17px 20px 17px 25px; color: #07111c; background: #48e7ff; clip-path: polygon(0 0, 94% 0, 100% 35%, 100% 100%, 6% 100%, 0 65%); box-shadow: 0 0 40px rgba(72,231,255,.25); }
+.primary:hover { transform: translateY(-2px) scale(1.015); box-shadow: 0 0 55px rgba(72,231,255,.42); }
+.primary span { font: 900 18px/1 'Chakra Petch'; letter-spacing: .1em; }
+.primary small { font: 700 10px/1 'Chakra Petch'; opacity: .65; }
+.secondary { margin-top: 12px; padding: 14px; color: #c7d0df; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.05); }
+.controls-grid { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 35px; }
+.controls-grid div { display: flex; flex-direction: column; gap: 5px; align-items: center; min-width: 74px; }
+.controls-grid b { color: #f5f8ff; font: 700 13px 'Chakra Petch'; }
+.controls-grid span { color: #667188; font: 700 8px 'Chakra Petch'; letter-spacing: .13em; }
+.coming { position: relative; z-index: 1; margin-top: 38px; color: #4d5a70; font: 600 9px 'Chakra Petch'; letter-spacing: .16em; }
+.coming b { color: #7a879d; margin-left: 8px; }
+.hud { position: fixed; inset: 0; pointer-events: none; z-index: 4; font-family: 'Chakra Petch', sans-serif; }
+.track-card, .best-card { position: absolute; top: 28px; display: flex; flex-direction: column; gap: 4px; padding-left: 13px; border-left: 3px solid #48e7ff; text-shadow: 0 2px 8px rgba(0,0,0,.55); }
+.track-card { left: 32px; }
+.best-card { right: 32px; border-left: 0; border-right: 3px solid #ff4967; padding-left: 0; padding-right: 13px; text-align: right; }
+.track-card span, .best-card span { color: rgba(255,255,255,.63); font-size: 10px; font-weight: 700; letter-spacing: .16em; }
+.track-card b, .best-card b { font-size: 17px; letter-spacing: .03em; }
+.timer { position: absolute; top: 25px; left: 50%; transform: translateX(-50%); font: 700 30px/1 'Chakra Petch'; letter-spacing: .03em; text-shadow: 0 3px 12px rgba(0,0,0,.5); }
+.event { position: absolute; top: 16%; left: 50%; transform: translate(-50%, -10px) scale(.92); opacity: 0; padding: 9px 18px; color: #48e7ff; border-top: 1px solid currentColor; border-bottom: 1px solid currentColor; background: rgba(5,14,25,.55); font: 700 15px 'Chakra Petch'; letter-spacing: .08em; }
+.event[data-tone='gold'] { color: #ffd84b; }.event[data-tone='red'] { color: #ff4967; }
+.event.show { animation: flash 1.7s ease forwards; }
+@keyframes flash { 0% { opacity:0; transform:translate(-50%,-10px) scale(.92) } 12%,75% { opacity:1; transform:translate(-50%,0) scale(1) } 100% { opacity:0; transform:translate(-50%,8px) scale(.98) } }
+.drift { position: absolute; left: 50%; bottom: 145px; transform: translateX(-50%) skewX(-8deg); opacity: 0; color: #ffd84b; font: 900 19px 'Chakra Petch'; letter-spacing: .22em; text-shadow: 0 0 18px rgba(255,216,75,.65); transition: opacity .16s; }
+.drift.visible { opacity: 1; }
+.bottom-hud { position: absolute; left: 50%; bottom: 31px; transform: translateX(-50%); display: flex; align-items: flex-end; gap: 22px; }
+.boost-block { width: min(360px, 48vw); }
+.boost-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 7px; }
+.boost-title span { color: #48e7ff; font-weight: 900; letter-spacing: .15em; }
+.boost-title b { font-size: 14px; }
+.boost-bar { height: 13px; padding: 2px; transform: skewX(-10deg); border: 1px solid rgba(255,255,255,.48); background: rgba(3,10,18,.48); overflow: hidden; }
+.boost-bar i { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, #1abde2, #60f4ff); box-shadow: 0 0 16px #48e7ff; transition: width .07s linear; }
+.boost-bar.active { border-color: #fff; animation: boostPulse .2s ease infinite alternate; }
+@keyframes boostPulse { to { box-shadow: 0 0 23px rgba(72,231,255,.8); } }
+.speed { display: flex; align-items: baseline; min-width: 112px; text-shadow: 0 3px 12px rgba(0,0,0,.55); }
+.speed b { font-size: 36px; line-height: .8; letter-spacing: -.05em; }.speed span { margin-left: 5px; color: #a4afc0; font-size: 9px; }
+.hints { position: absolute; left: 32px; bottom: 25px; color: rgba(255,255,255,.45); font: 600 9px 'Chakra Petch'; letter-spacing: .1em; }
+.hints i { display: inline-block; width: 3px; height: 3px; margin: 0 8px 2px; border-radius: 50%; background: #48e7ff; }
+.compact { background: rgba(5,10,19,.68); }
+.compact h2 { margin: 0 0 30px; font: 900 clamp(38px, 6vw, 72px)/1 'Chakra Petch'; letter-spacing: -.04em; }
+.gold-text, .finish-delta.faster { color: #ffd84b; }.finish-delta.slower { color: #ff7188; }
+.finish-delta { height: 18px; margin: -18px 0 28px; font: 700 13px 'Chakra Petch'; letter-spacing: .08em; }
+@media (max-width: 640px) { .best-card { top: 78px; right: 18px; }.track-card { top: 78px; left: 18px; }.timer { top: 25px; }.hints { display:none; }.controls-grid { grid-template-columns: repeat(2,1fr); }.coming { text-align:center; width:280px; line-height:1.6; }.speed b { font-size:28px; }.bottom-hud { width:calc(100% - 36px); gap:12px; }.boost-block { width:auto; flex:1; } }
