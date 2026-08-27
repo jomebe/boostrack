@@ -33,7 +33,7 @@ export class CameraController {
 
   update(car: CarController, dt: number): void {
     const mode = MODES[this.mode];
-    const boostPullback = car.boosting ? 1.8 : 0;
+    const boostPullback = car.boosting ? 3.8 : 0;
     const desired = car.object.position.clone()
       .addScaledVector(car.direction, -(mode.distance + boostPullback))
       .add(new THREE.Vector3(0, mode.height, 0));
@@ -48,8 +48,8 @@ export class CameraController {
       this.shake *= Math.pow(0.06, dt);
     }
     this.camera.lookAt(this.target);
-    const targetFov = 65 + Math.min(13, car.speed / 4) + (car.boosting ? 7 : 0);
-    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, Math.min(85, targetFov), 1 - Math.exp(-dt * 4));
+    const targetFov = 65 + Math.min(17, car.speed / 4) + (car.boosting ? 13 : 0);
+    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, Math.min(98, targetFov), 1 - Math.exp(-dt * (car.boosting ? 9 : 4)));
     this.camera.updateProjectionMatrix();
   }
 }

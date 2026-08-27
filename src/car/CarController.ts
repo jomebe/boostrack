@@ -19,13 +19,12 @@ export class CarController {
   boosting = false;
   drifting = false;
   grounded = true;
+  falling = false;
   yaw = 0;
 
   private verticalVelocity = 0;
-  private hitCooldown = 0;
   private padCooldown = 0;
   private jumpCooldown = 0;
-  private offTrackTime = 0;
   private roll = 0;
 
   constructor(
@@ -47,15 +46,13 @@ export class CarController {
     this.boosting = false;
     this.grounded = true;
     this.verticalVelocity = 0;
-    this.hitCooldown = 0;
     this.padCooldown = 0;
     this.jumpCooldown = 0;
-    this.offTrackTime = 0;
     this.roll = 0;
+    this.falling = false;
   }
 
   update(dt: number): void {
-    this.hitCooldown -= dt;
     this.padCooldown -= dt;
     this.jumpCooldown -= dt;
 
@@ -68,16 +65,18 @@ export class CarController {
     this.direction.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     const longitudinal = this.velocity.dot(this.direction);
     const speedAbs = Math.abs(longitudinal);
+    const wasBoosting = this.boosting;
     this.boosting = this.input.held('ShiftLeft', 'ShiftRight') && this.boost > 0.25 && forwardInput > 0 && this.grounded;
     if (this.boosting) this.boost = Math.max(0, this.boost - dt * 28);
 
-    const maxSpeed = this.boosting ? 66 : 52;
+    const maxSpeed = this.boosting ? 82 : 52;
     const reverseMax = -16;
     let acceleration = 0;
-    if (forwardInput > 0 && longitudinal < maxSpeed) acceleration = 24 * (this.boosting ? 1.42 : 1);
+    if (forwardInput > 0 && longitudinal < maxSpeed) acceleration = this.boosting ? 66 : 25;
     if (forwardInput < 0) acceleration = longitudinal > 2 ? -44 : -18;
     if (longitudinal < reverseMax && acceleration < 0) acceleration = 0;
     this.velocity.addScaledVector(this.direction, acceleration * dt);
+    if (this.boosting && !wasBoosting) this.velocity.addScaledVector(this.direction, 8);
 
     const speedRatio = Math.min(1, speedAbs / 52);
     const steerStrength = THREE.MathUtils.lerp(1.85, 0.72, speedRatio);
@@ -102,21 +101,29 @@ export class CarController {
     this.velocity.z *= frameDrag;
     this.velocity.y = 0;
 
-    this.applyTrackForces(location, dt);
+    this.applyTrackForces(location);
     this.object.position.addScaledVector(this.velocity, dt);
     this.object.position.y += this.verticalVelocity * dt;
 
     const after = this.track.nearest(this.object.position, this.progress);
     this.progress = after.progress;
+    const onRoad = Math.abs(after.distance) <= this.track.width * 0.5;
     const roadY = after.position.y + 0.64 + Math.sin(after.bank) * after.distance;
+    if (this.grounded && !onRoad) {
+      this.grounded = false;
+      this.falling = true;
+      this.verticalVelocity = Math.min(0, this.verticalVelocity);
+      this.events.onFall();
+    }
     if (!this.grounded) {
       this.verticalVelocity -= 21 * dt;
       this.roll += steerInput * dt * 0.45;
-      if (this.object.position.y <= roadY && this.verticalVelocity < 0) {
+      if (onRoad && this.object.position.y <= roadY && this.verticalVelocity < 0) {
         const impact = -this.verticalVelocity;
         this.object.position.y = roadY;
         this.verticalVelocity = 0;
         this.grounded = true;
+        this.falling = false;
         const good = Math.abs(this.roll) < 0.32 && impact < 17;
         this.events.onLand(good);
         this.roll *= 0.25;
@@ -129,31 +136,13 @@ export class CarController {
     this.speed = Math.abs(this.velocity.dot(this.direction));
     this.object.rotation.set(0, this.yaw, this.roll);
 
-    if (Math.abs(after.distance) > this.track.width * 1.4 || this.object.position.y < -8) {
-      this.offTrackTime += dt;
-      if (this.offTrackTime > 0.65) this.events.onFall();
-    } else {
-      this.offTrackTime = 0;
-    }
   }
 
   addBoost(amount: number): void {
     this.boost = Math.min(100, this.boost + amount);
   }
 
-  private applyTrackForces(location: TrackLocation, dt: number): void {
-    const edge = this.track.width * 0.5 - 1.2;
-    if (Math.abs(location.distance) > edge && this.grounded) {
-      const over = Math.abs(location.distance) - edge;
-      const correction = location.side.clone().multiplyScalar(-Math.sign(location.distance) * over * 8 * dt);
-      this.object.position.add(correction);
-      this.velocity.multiplyScalar(Math.max(0.78, 1 - over * dt * 0.08));
-      if (over > 0.9 && this.hitCooldown <= 0) {
-        this.hitCooldown = 0.55;
-        this.events.onCrash(Math.min(1, over / 3));
-      }
-    }
-
+  private applyTrackForces(location: TrackLocation): void {
     for (const pad of this.track.boostPads) {
       if (Math.abs(this.progress - pad) < 0.008 && this.padCooldown <= 0 && Math.abs(location.distance) < 7.5) {
         this.velocity.addScaledVector(location.tangent, 17);

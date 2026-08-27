@@ -1,5 +1,34 @@
 import * as THREE from 'three';
 
+export interface TrackDefinition {
+  id: string;
+  name: string;
+  subtitle: string;
+  accent: number;
+  roadColor: number;
+  points: Array<[number, number]>;
+  checkpoints: number[];
+  boostPads: number[];
+  jumps: number[];
+  tunnel: number;
+  loop: number;
+  bankStart: number;
+  bankEnd: number;
+}
+
+export const TRACKS: TrackDefinition[] = [
+  {
+    id: 'boost-valley', name: 'BOOST VALLEY', subtitle: 'FLOATING VALLEY · 3 CP', accent: 0x48e7ff, roadColor: 0x273044,
+    points: [[0, 0], [0, 95], [30, 190], [-34, 285], [15, 380], [4, 485], [48, 585], [84, 690], [52, 805], [-28, 910], [-12, 1020], [0, 1135], [0, 1250], [0, 1390]],
+    checkpoints: [0.245, 0.505, 0.715], boostPads: [0.29, 0.825], jumps: [0.335, 0.66], tunnel: 0.585, loop: 0.77, bankStart: 0.44, bankEnd: 0.56,
+  },
+  {
+    id: 'skyline-sprint', name: 'SKYLINE SPRINT', subtitle: 'CLOUD CIRCUIT · 3 CP', accent: 0xffc44d, roadColor: 0x342b46,
+    points: [[0, 0], [0, 88], [-48, 165], [-86, 255], [-38, 350], [42, 420], [86, 515], [45, 610], [-35, 700], [-72, 795], [-18, 890], [34, 990], [0, 1090], [0, 1240]],
+    checkpoints: [0.23, 0.49, 0.73], boostPads: [0.18, 0.78], jumps: [0.31, 0.65], tunnel: 0.54, loop: 0.83, bankStart: 0.38, bankEnd: 0.5,
+  },
+];
+
 export interface TrackSample {
   position: THREE.Vector3;
   tangent: THREE.Vector3;
@@ -15,6 +44,7 @@ export interface TrackLocation extends TrackSample {
 
 const TRACK_WIDTH = 19;
 const SAMPLE_COUNT = 700;
+const ELEVATION = 43;
 
 function seeded(index: number): number {
   const x = Math.sin(index * 91.733) * 43758.5453;
@@ -24,24 +54,20 @@ function seeded(index: number): number {
 export class Track {
   readonly group = new THREE.Group();
   readonly samples: TrackSample[] = [];
-  readonly checkpoints = [0.245, 0.505, 0.715];
-  readonly boostPads = [0.29, 0.825];
-  readonly jumps = [0.335, 0.66];
+  readonly checkpoints: number[];
+  readonly boostPads: number[];
+  readonly jumps: number[];
   readonly width = TRACK_WIDTH;
   readonly start: TrackSample;
+  readonly definition: TrackDefinition;
+  private readonly curve: THREE.CatmullRomCurve3;
 
-  private curve: THREE.CatmullRomCurve3;
-
-  constructor(scene: THREE.Scene) {
-    this.curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 95),
-      new THREE.Vector3(30, 0, 190), new THREE.Vector3(-34, 0, 285),
-      new THREE.Vector3(15, 0, 380), new THREE.Vector3(4, 0, 485),
-      new THREE.Vector3(48, 0, 585), new THREE.Vector3(84, 0, 690),
-      new THREE.Vector3(52, 0, 805), new THREE.Vector3(-28, 0, 910),
-      new THREE.Vector3(-12, 0, 1020), new THREE.Vector3(0, 0, 1135),
-      new THREE.Vector3(0, 0, 1250), new THREE.Vector3(0, 0, 1390),
-    ], false, 'catmullrom', 0.38);
+  constructor(scene: THREE.Scene, definition: TrackDefinition) {
+    this.definition = definition;
+    this.checkpoints = definition.checkpoints;
+    this.boostPads = definition.boostPads;
+    this.jumps = definition.jumps;
+    this.curve = new THREE.CatmullRomCurve3(definition.points.map(([x, z]) => new THREE.Vector3(x, 0, z)), false, 'catmullrom', 0.38);
     this.buildSamples();
     this.start = this.samples[0];
     this.buildRoad();
@@ -49,17 +75,29 @@ export class Track {
     scene.add(this.group);
   }
 
+  dispose(scene: THREE.Scene): void {
+    scene.remove(this.group);
+    this.group.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.geometry.dispose();
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose());
+      }
+    });
+  }
+
   private heightAt(t: number): number {
     const mound = (center: number, radius: number, height: number) => {
       const d = Math.abs(t - center) / radius;
       return d < 1 ? Math.sin((1 - d) * Math.PI / 2) * height : 0;
     };
-    return mound(0.33, 0.045, 8) + mound(0.66, 0.035, 5) + mound(0.53, 0.08, 2.5);
+    return ELEVATION + mound(this.jumps[0], 0.045, 8) + mound(this.jumps[1], 0.04, 6) + mound(this.definition.bankStart + 0.09, 0.08, 2.5);
   }
 
   private bankAt(t: number): number {
-    if (t < 0.44 || t > 0.56) return 0;
-    return Math.sin(((t - 0.44) / 0.12) * Math.PI) * -0.24;
+    const { bankStart, bankEnd } = this.definition;
+    if (t < bankStart || t > bankEnd) return 0;
+    return Math.sin(((t - bankStart) / (bankEnd - bankStart)) * Math.PI) * -0.24;
   }
 
   private buildSamples(): void {
@@ -81,7 +119,7 @@ export class Track {
     const positions: number[] = [];
     const colors: number[] = [];
     const indices: number[] = [];
-    const roadColor = new THREE.Color(0x273044);
+    const roadColor = new THREE.Color(this.definition.roadColor);
     for (const sample of this.samples) {
       const bankY = Math.sin(sample.bank) * TRACK_WIDTH * 0.5;
       const left = sample.position.clone().addScaledVector(sample.side, TRACK_WIDTH * 0.5);
@@ -90,7 +128,7 @@ export class Track {
       right.y -= bankY;
       positions.push(...left.toArray(), ...right.toArray());
       const stripe = Math.floor(sample.progress * 80) % 2 === 0;
-      const color = stripe ? roadColor : roadColor.clone().multiplyScalar(0.92);
+      const color = stripe ? roadColor : roadColor.clone().multiplyScalar(0.88);
       colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
     }
     for (let i = 0; i < this.samples.length - 1; i += 1) {
@@ -105,24 +143,20 @@ export class Track {
     const road = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.05 }));
     road.receiveShadow = true;
     this.group.add(road);
-
     for (let i = 0; i < this.samples.length; i += 7) {
-      const sample = this.samples[i];
-      this.addEdgeMarker(sample, 1);
-      this.addEdgeMarker(sample, -1);
+      this.addEdgeMarker(this.samples[i], 1);
+      this.addEdgeMarker(this.samples[i], -1);
     }
-    this.addStartFinish();
-    this.checkpoints.forEach((progress, index) => this.addGate(progress, `CP ${index + 1}`, 0x49e9ff));
+    this.addGate(0.012, 'START', 0xffd84b);
+    this.addGate(0.985, 'FINISH', 0xff4f70);
+    this.checkpoints.forEach((progress, index) => this.addGate(progress, `CP ${index + 1}`, this.definition.accent));
     this.boostPads.forEach((progress) => this.addBoostPad(progress));
-    this.addTunnel(0.585);
-    this.addLoop(0.77);
+    this.addTunnel(this.definition.tunnel);
+    this.addLoop(this.definition.loop);
   }
 
   private addEdgeMarker(sample: TrackSample, sideSign: number): void {
-    const marker = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.22, 2.3),
-      new THREE.MeshStandardMaterial({ color: Math.floor(sample.progress * 100) % 2 ? 0xf6f8ff : 0xff4057, roughness: 0.6 }),
-    );
+    const marker = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 2.3), new THREE.MeshStandardMaterial({ color: Math.floor(sample.progress * 100) % 2 ? 0xf6f8ff : 0xff4057, roughness: 0.6 }));
     marker.position.copy(sample.position).addScaledVector(sample.side, sideSign * (TRACK_WIDTH * 0.5 - 0.42));
     marker.position.y += 0.16;
     marker.rotation.y = Math.atan2(sample.tangent.x, sample.tangent.z);
@@ -134,9 +168,8 @@ export class Track {
     const sample = this.sampleAt(progress);
     const gate = new THREE.Group();
     const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, roughness: 0.25 });
-    const postGeo = new THREE.BoxGeometry(0.38, 5.3, 0.38);
     for (const x of [-TRACK_WIDTH * 0.52, TRACK_WIDTH * 0.52]) {
-      const post = new THREE.Mesh(postGeo, mat);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.38, 5.3, 0.38), mat);
       post.position.set(x, 2.65, 0);
       gate.add(post);
     }
@@ -149,11 +182,6 @@ export class Track {
     gate.position.copy(sample.position);
     gate.rotation.y = Math.atan2(sample.tangent.x, sample.tangent.z);
     this.group.add(gate);
-  }
-
-  private addStartFinish(): void {
-    this.addGate(0.012, 'START', 0xffd84b);
-    this.addGate(0.985, 'FINISH', 0xff4f70);
   }
 
   private makeLabel(text: string, color: number): THREE.Sprite {
@@ -175,10 +203,7 @@ export class Track {
     const sample = this.sampleAt(progress);
     const group = new THREE.Group();
     for (let i = -2; i <= 2; i += 1) {
-      const pad = new THREE.Mesh(
-        new THREE.BoxGeometry(2.6, 0.08, 4.6),
-        new THREE.MeshStandardMaterial({ color: 0x13d9ff, emissive: 0x13bde8, emissiveIntensity: 2.2, roughness: 0.25 }),
-      );
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 4.6), new THREE.MeshStandardMaterial({ color: 0x13d9ff, emissive: 0x13bde8, emissiveIntensity: 2.6, roughness: 0.25 }));
       pad.position.x = i * 3.1;
       group.add(pad);
     }
@@ -192,10 +217,7 @@ export class Track {
     const center = this.sampleAt(progress);
     const tunnel = new THREE.Group();
     for (let z = -22; z <= 22; z += 5.5) {
-      const arch = new THREE.Mesh(
-        new THREE.TorusGeometry(10.4, 0.28, 6, 18, Math.PI),
-        new THREE.MeshStandardMaterial({ color: 0x5f6f8d, roughness: 0.65 }),
-      );
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(10.4, 0.28, 6, 18, Math.PI), new THREE.MeshStandardMaterial({ color: 0x5f6f8d, roughness: 0.65 }));
       arch.position.set(0, 0.25, z);
       tunnel.add(arch);
     }
@@ -207,18 +229,11 @@ export class Track {
   private addLoop(progress: number): void {
     const center = this.sampleAt(progress);
     const group = new THREE.Group();
-    const loop = new THREE.Mesh(
-      new THREE.TorusGeometry(13, 2.1, 10, 48),
-      new THREE.MeshStandardMaterial({ color: 0x3a4761, roughness: 0.62, metalness: 0.15 }),
-    );
+    const loop = new THREE.Mesh(new THREE.TorusGeometry(13, 2.1, 10, 48), new THREE.MeshStandardMaterial({ color: 0x3a4761, roughness: 0.62, metalness: 0.15 }));
     loop.position.y = 13;
     group.add(loop);
-    const glow = new THREE.Mesh(
-      new THREE.TorusGeometry(13, 0.18, 6, 64),
-      new THREE.MeshBasicMaterial({ color: 0x48e7ff }),
-    );
-    glow.position.y = 13;
-    glow.position.z = -2.05;
+    const glow = new THREE.Mesh(new THREE.TorusGeometry(13, 0.18, 6, 64), new THREE.MeshBasicMaterial({ color: this.definition.accent }));
+    glow.position.set(0, 13, -2.05);
     group.add(glow);
     group.position.copy(center.position);
     group.rotation.y = Math.atan2(center.tangent.x, center.tangent.z);
@@ -226,20 +241,19 @@ export class Track {
   }
 
   private buildScenery(): void {
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(2400, 2400),
-      new THREE.MeshStandardMaterial({ color: 0x6fa85b, roughness: 1 }),
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.set(0, -1.2, 650);
-    ground.receiveShadow = true;
-    this.group.add(ground);
-
-    for (let i = 0; i < 90; i += 1) {
+    for (let i = 18; i < this.samples.length; i += 36) {
+      const sample = this.samples[i];
+      const rock = new THREE.Mesh(new THREE.ConeGeometry(14 + seeded(i) * 12, 40 + seeded(i + 1) * 20, 7), new THREE.MeshStandardMaterial({ color: 0x536173, roughness: 1, flatShading: true }));
+      rock.position.copy(sample.position);
+      rock.position.y -= 23;
+      rock.rotation.y = seeded(i + 2) * Math.PI;
+      this.group.add(rock);
+    }
+    for (let i = 0; i < 66; i += 1) {
       const progress = seeded(i * 3) * 0.95;
       const sample = this.sampleAt(progress);
       const side = seeded(i * 3 + 1) > 0.5 ? 1 : -1;
-      const distance = 25 + seeded(i * 3 + 2) * 105;
+      const distance = 25 + seeded(i * 3 + 2) * 75;
       const tree = new THREE.Group();
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.65, 3.4, 6), new THREE.MeshStandardMaterial({ color: 0x6f4933 }));
       trunk.position.y = 1.7;
@@ -247,17 +261,13 @@ export class Track {
       crown.position.y = 5.1;
       tree.add(trunk, crown);
       tree.position.copy(sample.position).addScaledVector(sample.side, side * distance);
-      tree.position.y = -1;
+      tree.position.y = sample.position.y - 3;
       this.group.add(tree);
     }
-
-    for (let i = 0; i < 28; i += 1) {
+    for (let i = 0; i < 20; i += 1) {
       const side = i % 2 ? 1 : -1;
-      const mountain = new THREE.Mesh(
-        new THREE.ConeGeometry(40 + seeded(i) * 45, 60 + seeded(i + 30) * 85, 6),
-        new THREE.MeshStandardMaterial({ color: i % 3 === 0 ? 0x718091 : 0x647b75, roughness: 1, flatShading: true }),
-      );
-      mountain.position.set(side * (150 + seeded(i + 10) * 300), 25, i * 58 - 30);
+      const mountain = new THREE.Mesh(new THREE.ConeGeometry(45 + seeded(i) * 45, 70 + seeded(i + 30) * 85, 6), new THREE.MeshStandardMaterial({ color: i % 3 === 0 ? 0x718091 : 0x647b75, roughness: 1, flatShading: true }));
+      mountain.position.set(side * (150 + seeded(i + 10) * 300), -10, i * 70 - 50);
       mountain.rotation.y = seeded(i + 20) * Math.PI;
       this.group.add(mountain);
     }
