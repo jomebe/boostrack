@@ -7,6 +7,7 @@ export interface CarEvents {
   onLand: (good: boolean) => void;
   onBoostPad: () => void;
   onDrift: (amount: number) => void;
+  onDriftRelease: (power: number) => void;
   onFall: () => void;
 }
 
@@ -18,6 +19,8 @@ export class CarController {
   boost = 100;
   boosting = false;
   drifting = false;
+  driftPower = 0;
+  driftSide = 0;
   grounded = true;
   falling = false;
   yaw = 0;
@@ -50,6 +53,9 @@ export class CarController {
     this.jumpCooldown = 0;
     this.roll = 0;
     this.falling = false;
+    this.drifting = false;
+    this.driftPower = 0;
+    this.driftSide = 0;
   }
 
   update(dt: number): void {
@@ -79,7 +85,8 @@ export class CarController {
     if (this.boosting && !wasBoosting) this.velocity.addScaledVector(this.direction, 8);
 
     const speedRatio = Math.min(1, speedAbs / 52);
-    const steerStrength = THREE.MathUtils.lerp(1.85, 0.72, speedRatio);
+    const driftIntent = this.grounded && handbrake && speedAbs > 11 && Math.abs(steerInput) > 0.12;
+    const steerStrength = THREE.MathUtils.lerp(1.85, 0.72, speedRatio) * (driftIntent ? 1.45 : 1);
     const directionSign = longitudinal < -0.5 ? -1 : 1;
     if (speedAbs > 0.8 && this.grounded) this.yaw += steerInput * steerStrength * directionSign * dt * Math.min(1, speedAbs / 8);
 
@@ -88,12 +95,27 @@ export class CarController {
     const forwardVelocity = this.direction.clone().multiplyScalar(this.velocity.dot(this.direction));
     const lateralVelocity = right.clone().multiplyScalar(this.velocity.dot(right));
     const slip = Math.abs(this.velocity.dot(right));
-    const grip = this.grounded ? (handbrake ? 1.35 : 6.5) : 0.18;
+    const grip = this.grounded ? (handbrake ? 0.62 : 6.5) : 0.18;
     lateralVelocity.multiplyScalar(Math.max(0, 1 - grip * dt));
     this.velocity.x = forwardVelocity.x + lateralVelocity.x;
     this.velocity.z = forwardVelocity.z + lateralVelocity.z;
-    this.drifting = this.grounded && speedAbs > 15 && slip > 2.6 && Math.abs(steerInput) > 0.2;
-    if (this.drifting) this.events.onDrift(dt * Math.min(2.4, slip / 4));
+    const wasDrifting = this.drifting;
+    this.drifting = driftIntent && (slip > 0.7 || speedAbs > 16);
+    if (this.drifting) {
+      this.driftSide = THREE.MathUtils.lerp(this.driftSide, steerInput, Math.min(1, dt * 14));
+      this.velocity.addScaledVector(right, steerInput * speedAbs * dt * 0.28);
+      this.velocity.addScaledVector(this.direction, dt * 4.5);
+      this.driftPower = Math.min(1, this.driftPower + dt * (0.42 + speedRatio * 0.5));
+      this.events.onDrift(dt * (1.7 + this.driftPower * 1.2));
+    } else {
+      this.driftSide = THREE.MathUtils.lerp(this.driftSide, 0, Math.min(1, dt * 9));
+      if (wasDrifting && this.driftPower > 0.2) {
+        const slingshot = 5 + this.driftPower * 17;
+        this.velocity.addScaledVector(this.direction, slingshot);
+        this.events.onDriftRelease(this.driftPower);
+      }
+      this.driftPower = Math.max(0, this.driftPower - dt * 2.5);
+    }
 
     const drag = this.grounded ? (forwardInput === 0 ? 0.985 : 0.995) : 0.999;
     const frameDrag = Math.pow(drag, dt * 60);
@@ -130,7 +152,8 @@ export class CarController {
       }
     } else {
       this.object.position.y = THREE.MathUtils.lerp(this.object.position.y, roadY, Math.min(1, dt * 14));
-      this.roll = THREE.MathUtils.lerp(this.roll, -after.bank - steerInput * speedRatio * 0.07, Math.min(1, dt * 7));
+      const lean = this.drifting ? this.driftSide * 0.24 : steerInput * speedRatio * 0.07;
+      this.roll = THREE.MathUtils.lerp(this.roll, -after.bank - lean, Math.min(1, dt * 7));
     }
 
     this.speed = Math.abs(this.velocity.dot(this.direction));

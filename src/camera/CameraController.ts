@@ -37,6 +37,9 @@ export class CameraController {
     const desired = car.object.position.clone()
       .addScaledVector(car.direction, -(mode.distance + boostPullback))
       .add(new THREE.Vector3(0, mode.height, 0));
+    if (car.drifting && mode.name !== 'HOOD') {
+      desired.add(new THREE.Vector3(car.direction.z, 0, -car.direction.x).multiplyScalar(car.driftSide * 2.1));
+    }
     const follow = 1 - Math.exp(-dt * (mode.name === 'HOOD' ? 14 : 6));
     this.camera.position.lerp(desired, follow);
     const desiredTarget = car.object.position.clone().addScaledVector(car.direction, mode.name === 'HOOD' ? 20 : 7).add(new THREE.Vector3(0, 1, 0));

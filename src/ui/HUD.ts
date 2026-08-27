@@ -122,7 +122,7 @@ export class HUD {
     this.best.textContent = formatTime(best?.time ?? null);
   }
 
-  update(time: number, checkpoint: number, checkpointCount: number, boost: number, speed: number, boosting: boolean, drifting: boolean, falling: boolean): void {
+  update(time: number, checkpoint: number, checkpointCount: number, boost: number, speed: number, boosting: boolean, drifting: boolean, driftPower: number, falling: boolean): void {
     this.timer.textContent = formatTime(time);
     this.checkpoint.textContent = `CP ${checkpoint} / ${checkpointCount}`;
     this.boostFill.style.width = `${boost}%`;
@@ -130,6 +130,7 @@ export class HUD {
     this.speed.textContent = String(Math.round(speed * 3.6)).padStart(3, '0');
     this.boostFill.parentElement?.classList.toggle('active', boosting);
     this.drift.classList.toggle('visible', drifting);
+    this.drift.style.setProperty('--drift-power', `${Math.round(driftPower * 100)}%`);
     this.get('speed-lines').classList.toggle('active', boosting);
     this.hud.classList.toggle('falling', falling);
   }

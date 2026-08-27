@@ -42,8 +42,10 @@ h1 span { color: #48e7ff; }
 .event[data-tone='gold'] { color: #ffd84b; }.event[data-tone='red'] { color: #ff4967; }
 .event.show { animation: flash 1.7s ease forwards; }
 @keyframes flash { 0% { opacity:0; transform:translate(-50%,-10px) scale(.92) } 12%,75% { opacity:1; transform:translate(-50%,0) scale(1) } 100% { opacity:0; transform:translate(-50%,8px) scale(.98) } }
-.drift { position: absolute; left: 50%; bottom: 145px; transform: translateX(-50%) skewX(-8deg); opacity: 0; color: #ffd84b; font: 900 19px 'Chakra Petch'; letter-spacing: .22em; text-shadow: 0 0 18px rgba(255,216,75,.65); transition: opacity .16s; }
-.drift.visible { opacity: 1; }
+.drift { --drift-power:0%; position: absolute; left: 50%; bottom: 145px; min-width:210px; padding-bottom:9px; text-align:center; transform: translateX(-50%) skewX(-8deg) scale(.84); opacity: 0; color: #ffd84b; font: 900 19px 'Chakra Petch'; letter-spacing: .22em; text-shadow: 0 0 18px rgba(255,216,75,.65); transition: opacity .16s,transform .16s; }
+.drift::after { content:''; position:absolute; left:0; bottom:0; width:var(--drift-power); height:3px; background:linear-gradient(90deg,#ff8b45,#fff3a8); box-shadow:0 0 12px #ffbd5f; transition:width .07s linear; }.drift::before { content:''; position:absolute; left:0; right:0; bottom:0; height:3px; background:rgba(255,255,255,.22); }
+.drift.visible { opacity: 1; transform:translateX(-50%) skewX(-8deg) scale(1); animation:driftPulse .34s ease-in-out infinite alternate; }
+@keyframes driftPulse { to { text-shadow:0 0 28px rgba(255,191,67,1),0 0 54px rgba(255,104,44,.7); } }
 .bottom-hud { position: absolute; left: 50%; bottom: 31px; transform: translateX(-50%); display: flex; align-items: flex-end; gap: 22px; }
 .boost-block { width: min(360px, 48vw); }
 .boost-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 7px; }

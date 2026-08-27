@@ -22,6 +22,7 @@ export class Game {
   private readonly recorder = new GhostRecorder();
   private readonly clock = new THREE.Clock();
   private readonly particles = new THREE.Group();
+  private readonly driftParticles = new THREE.Group();
   private readonly cameraController: CameraController;
   private track!: Track;
   private car!: CarController;
@@ -115,6 +116,7 @@ export class Game {
       onLand: (good) => this.land(good),
       onBoostPad: () => this.boostPad(),
       onDrift: (amount) => this.car.addBoost(amount * 2.2),
+      onDriftRelease: (power) => this.driftRelease(power),
       onFall: () => this.fall(),
     });
     this.ghostObject = createCar(true);
@@ -136,6 +138,14 @@ export class Game {
       this.particles.add(particle);
     }
     this.scene.add(this.particles);
+    const driftGeometry = new THREE.IcosahedronGeometry(0.18, 1);
+    const driftMaterial = new THREE.MeshBasicMaterial({ color: 0xffcc62, transparent: true, opacity: 0.82 });
+    for (let i = 0; i < 52; i += 1) {
+      const particle = new THREE.Mesh(driftGeometry, driftMaterial);
+      particle.visible = false;
+      this.driftParticles.add(particle);
+    }
+    this.scene.add(this.driftParticles);
   }
 
   private frame(): void {
@@ -156,12 +166,12 @@ export class Game {
     this.car.update(dt);
     this.recorder.record(this.elapsed, this.car.object);
     this.ghost.update(this.elapsed);
-    this.audio.update(this.car.speed / 82, this.car.boosting || this.padBurst > 0);
+    this.audio.update(this.car.speed / 82, this.car.boosting || this.padBurst > 0 || this.car.drifting);
     this.padBurst = Math.max(0, this.padBurst - dt);
     const target = this.track.checkpoints[this.checkpoint];
     if (target !== undefined && this.car.progress >= target) this.passCheckpoint();
     if (this.checkpoint === this.track.checkpoints.length && this.car.progress >= 0.982) this.finishRace();
-    this.hud.update(this.elapsed, this.checkpoint, this.track.checkpoints.length, this.car.boost, this.car.speed, this.car.boosting, this.car.drifting, this.car.falling);
+    this.hud.update(this.elapsed, this.checkpoint, this.track.checkpoints.length, this.car.boost, this.car.speed, this.car.boosting, this.car.drifting, this.car.driftPower, this.car.falling);
   }
 
   private beginRace(): void {
@@ -258,6 +268,12 @@ export class Game {
     this.audio.beep(920, 0.08);
   }
 
+  private driftRelease(power: number): void {
+    this.cameraController.impact(0.1 + power * 0.18);
+    this.hud.flash(`DRIFT SLINGSHOT  +${Math.round(power * 18)} KM/H`, 'gold');
+    this.audio.beep(940 + power * 320, 0.14);
+  }
+
   private togglePause(): void {
     if (this.state === 'running') {
       this.state = 'paused';
@@ -284,6 +300,25 @@ export class Game {
           .add(new THREE.Vector3((Math.random() - 0.5) * 2.6, 0.42 + (Math.random() - 0.5) * 1.1, (Math.random() - 0.5) * 0.3));
         particle.scale.setScalar(0.55 + (1 - phase / 32) * 2.6);
         particle.rotation.x += dt * 12;
+      }
+      index += 1;
+    }
+    const drifting = this.state === 'running' && this.car.drifting;
+    const right = new THREE.Vector3(this.car.direction.z, 0, -this.car.direction.x);
+    index = 0;
+    for (const child of this.driftParticles.children) {
+      const particle = child as THREE.Mesh;
+      particle.visible = drifting && index < 44;
+      if (particle.visible) {
+        const phase = (performance.now() * 0.055 + index * 2.3) % 28;
+        const wheelSide = index % 2 ? 1 : -1;
+        particle.position.copy(this.car.object.position)
+          .addScaledVector(this.car.direction, -1.45 - phase * 0.26)
+          .addScaledVector(right, wheelSide * (0.92 + Math.random() * 0.22))
+          .add(new THREE.Vector3(0, 0.25 + Math.random() * 0.7, 0));
+        particle.scale.setScalar(0.45 + this.car.driftPower * 2.2 + phase * 0.025);
+        particle.rotation.x += dt * 15;
+        particle.rotation.y += dt * 11;
       }
       index += 1;
     }
