@@ -31,6 +31,7 @@ export class CarController {
   private pitch = 0;
   private previousRoadY = 0;
   private surfaceVerticalVelocity = 0;
+  private steering = 0;
 
   constructor(
     readonly object: THREE.Group,
@@ -57,6 +58,7 @@ export class CarController {
     this.roll = 0;
     this.previousRoadY = sample.position.y + 0.64;
     this.surfaceVerticalVelocity = 0;
+    this.steering = 0;
     this.falling = false;
     this.drifting = false;
     this.driftPower = 0;
@@ -89,9 +91,11 @@ export class CarController {
 
     const speedRatio = Math.min(1, speedAbs / 52);
     const driftIntent = this.grounded && handbrake && speedAbs > 11 && Math.abs(steerInput) > 0.12;
-    const maxSteerAngle = THREE.MathUtils.lerp(0.5, 0.14, speedRatio) * (driftIntent ? 1.3 : 1);
+    const steeringResponse = THREE.MathUtils.lerp(10, 5.5, speedRatio) * (driftIntent ? 1.2 : 1);
+    this.steering = THREE.MathUtils.lerp(this.steering, steerInput, Math.min(1, dt * steeringResponse));
+    const maxSteerAngle = THREE.MathUtils.lerp(0.38, 0.075, speedRatio) * (driftIntent ? 1.16 : 1);
     if (speedAbs > 0.8 && this.grounded) {
-      const yawRate = (longitudinal / 3.05) * Math.tan(steerInput * maxSteerAngle);
+      const yawRate = THREE.MathUtils.clamp((longitudinal / 3.35) * Math.tan(this.steering * maxSteerAngle), -1.15, 1.15);
       this.yaw += yawRate * dt;
     }
 
@@ -100,7 +104,9 @@ export class CarController {
     const forwardVelocity = this.direction.clone().multiplyScalar(this.velocity.dot(this.direction));
     const lateralVelocity = right.clone().multiplyScalar(this.velocity.dot(right));
     const slip = Math.abs(this.velocity.dot(right));
-    const grip = this.grounded ? (handbrake ? 0.62 : 6.5) : 0.18;
+    const lateralLimit = driftIntent ? 7.2 : 2.8;
+    if (lateralVelocity.length() > lateralLimit) lateralVelocity.setLength(lateralLimit);
+    const grip = this.grounded ? (handbrake ? 1.05 : 10.5) : 0.18;
     lateralVelocity.multiplyScalar(Math.max(0, 1 - grip * dt));
     this.velocity.x = forwardVelocity.x + lateralVelocity.x;
     this.velocity.z = forwardVelocity.z + lateralVelocity.z;
@@ -108,14 +114,14 @@ export class CarController {
     this.drifting = driftIntent && (slip > 0.7 || speedAbs > 16);
     if (this.drifting) {
       this.driftSide = THREE.MathUtils.lerp(this.driftSide, steerInput, Math.min(1, dt * 14));
-      this.velocity.addScaledVector(right, steerInput * speedAbs * dt * 0.28);
-      this.velocity.addScaledVector(this.direction, dt * 4.5);
+      this.velocity.addScaledVector(right, this.steering * speedAbs * dt * 0.16);
+      this.velocity.addScaledVector(this.direction, dt * 3.2);
       this.driftPower = Math.min(1, this.driftPower + dt * (0.42 + speedRatio * 0.5));
       this.events.onDrift(dt * (1.7 + this.driftPower * 1.2));
     } else {
       this.driftSide = THREE.MathUtils.lerp(this.driftSide, 0, Math.min(1, dt * 9));
       if (wasDrifting && this.driftPower > 0.2) {
-        const slingshot = 5 + this.driftPower * 17;
+        const slingshot = 4 + this.driftPower * 13;
         this.velocity.addScaledVector(this.direction, slingshot);
         this.events.onDriftRelease(this.driftPower);
       }
@@ -173,7 +179,7 @@ export class CarController {
       }
       this.previousRoadY = roadY;
       this.surfaceVerticalVelocity = surfaceVelocity;
-      const lean = this.drifting ? this.driftSide * 0.24 : steerInput * speedRatio * 0.07;
+      const lean = this.drifting ? this.driftSide * 0.2 : this.steering * speedRatio * 0.055;
       this.roll = THREE.MathUtils.lerp(this.roll, -after.bank - lean, Math.min(1, dt * 7));
     }
 
