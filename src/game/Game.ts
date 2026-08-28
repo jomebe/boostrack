@@ -245,14 +245,15 @@ export class Game {
     const previous = this.personalBest?.time ?? null;
     const run = { time, frames: this.recorder.frames, splits: this.splitTimes };
     const newBest = this.profile.saveBest(this.selectedTrack.id, run);
-    if (newBest) {
-      this.personalBest = run;
+    if (newBest) this.personalBest = run;
+    const bestForLeaderboard = this.profile.best(this.selectedTrack.id);
+    if (bestForLeaderboard) {
       const profile = this.profile.get();
       void this.leaderboard.submit({
         trackId: this.selectedTrack.id,
         racerId: profile.id,
         nickname: profile.nickname,
-        time,
+        time: bestForLeaderboard.time,
       }).catch(() => undefined);
     }
     this.state = 'finished';
