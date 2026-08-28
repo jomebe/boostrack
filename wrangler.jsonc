@@ -2,5 +2,13 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "boostrack",
   "pages_build_output_dir": "./dist",
-  "compatibility_date": "2026-08-28"
+  "compatibility_date": "2026-08-28",
+  "d1_databases": [
+    {
+      "binding": "LEADERBOARD",
+      "database_name": "boostrack-leaderboard",
+      "database_id": "1546dea3-b8aa-4468-aeb6-19a3c0e6dd6d",
+      "migrations_dir": "migrations"
+    }
+  ]
 }

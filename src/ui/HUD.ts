@@ -1,4 +1,5 @@
 import { RacerProfile } from '../profile/ProfileStore';
+import { LeaderboardEntry } from '../profile/LeaderboardClient';
 import { GhostRun } from '../race/Ghost';
 import { TrackDefinition } from '../track/Track';
 
@@ -30,6 +31,9 @@ export class HUD {
   private readonly currentTrack: HTMLElement;
   private readonly racerInput: HTMLInputElement;
   private readonly racerId: HTMLElement;
+  private readonly leaderboard: HTMLElement;
+  private readonly leaderboardTitle: HTMLElement;
+  private readonly leaderboardRows: HTMLElement;
   private selectedTrackId: string;
 
   onPlay: (trackId: string) => void = () => undefined;
@@ -37,6 +41,9 @@ export class HUD {
   onRestart: () => void = () => undefined;
   onMenu: () => void = () => undefined;
   onProfileSave: (nickname: string) => void = () => undefined;
+  onLeaderboardOpen: () => void = () => undefined;
+  onLeaderboardTrack: (trackId: string) => void = () => undefined;
+  onLeaderboardClose: () => void = () => undefined;
 
   constructor(root: HTMLElement, tracks: TrackDefinition[]) {
     this.tracks = tracks;
@@ -52,9 +59,11 @@ export class HUD {
           <div class="select-title"><span>SELECT TRACK</span><small>2 PLAYABLE MAPS</small></div>
           <div id="track-grid" class="track-grid">${tracks.map((track, index) => `<button class="track-choice ${index === 0 ? 'selected' : ''}" data-track="${track.id}" style="--accent:#${track.accent.toString(16).padStart(6, '0')}"><span class="track-index">0${index + 1}</span><b>${track.name}</b><small>${track.subtitle}</small><em id="record-${track.id}">PB --:--.---</em></button>`).join('')}</div>
           <button id="play" class="primary"><span>RACE SELECTED TRACK</span><small>ENTER</small></button>
+          <button id="leaderboard-open" class="secondary">WORLD RANKING</button>
           <div class="controls-grid"><div><b>WASD</b><span>DRIVE</span></div><div><b>SHIFT</b><span>BOOST</span></div><div><b>SPACE</b><span>DRIFT</span></div><div><b>T / R</b><span>RECOVER / RESTART</span></div></div>
         </div>
       </section>
+      <section id="leaderboard" class="overlay compact hidden"><div class="leaderboard-card"><div class="eyebrow">GLOBAL TIME ATTACK</div><h2 id="leaderboard-title">WORLD RANKING</h2><div id="leaderboard-tabs" class="leaderboard-tabs">${tracks.map((track) => `<button data-leaderboard-track="${track.id}">${track.name}</button>`).join('')}</div><div id="leaderboard-list" class="leaderboard-list"></div><button id="leaderboard-back" class="text-button">BACK TO TRACK SELECT</button></div></section>
       <section id="hud" class="hud hidden">
         <div class="track-card"><span id="current-track">BOOST VALLEY</span><b id="checkpoint">CP 0 / 3</b></div>
         <div id="timer" class="timer">00:00.000</div>
@@ -84,6 +93,9 @@ export class HUD {
     this.currentTrack = this.get('current-track');
     this.racerInput = this.get<HTMLInputElement>('racer-name');
     this.racerId = this.get('racer-id');
+    this.leaderboard = this.get('leaderboard');
+    this.leaderboardTitle = this.get('leaderboard-title');
+    this.leaderboardRows = this.get('leaderboard-list');
     this.get<HTMLButtonElement>('play').addEventListener('click', () => this.onPlay(this.selectedTrackId));
     this.get<HTMLButtonElement>('resume').addEventListener('click', () => this.onResume());
     this.get<HTMLButtonElement>('restart-pause').addEventListener('click', () => this.onRestart());
@@ -91,10 +103,16 @@ export class HUD {
     this.get<HTMLButtonElement>('menu-pause').addEventListener('click', () => this.onMenu());
     this.get<HTMLButtonElement>('menu-finish').addEventListener('click', () => this.onMenu());
     this.get<HTMLButtonElement>('save-profile').addEventListener('click', () => this.onProfileSave(this.racerInput.value));
+    this.get<HTMLButtonElement>('leaderboard-open').addEventListener('click', () => this.onLeaderboardOpen());
+    this.get<HTMLButtonElement>('leaderboard-back').addEventListener('click', () => this.onLeaderboardClose());
     this.racerInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') this.onProfileSave(this.racerInput.value); });
     this.get<HTMLElement>('track-grid').addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-track]');
       if (button) this.selectTrack(button.dataset.track ?? this.selectedTrackId);
+    });
+    this.get<HTMLElement>('leaderboard-tabs').addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-leaderboard-track]');
+      if (button) this.onLeaderboardTrack(button.dataset.leaderboardTrack ?? this.selectedTrackId);
     });
   }
 
@@ -103,6 +121,7 @@ export class HUD {
     this.menu.classList.remove('hidden');
     this.pause.classList.add('hidden');
     this.finish.classList.add('hidden');
+    this.leaderboard.classList.add('hidden');
     this.hud.classList.add('hidden');
     this.racerInput.value = profile.nickname;
     this.racerId.textContent = profile.id;
@@ -118,6 +137,7 @@ export class HUD {
     this.pause.classList.add('hidden');
     this.finish.classList.add('hidden');
     this.hud.classList.remove('hidden');
+    this.leaderboard.classList.add('hidden');
     this.currentTrack.textContent = track.name;
     this.best.textContent = formatTime(best?.time ?? null);
   }
@@ -144,6 +164,38 @@ export class HUD {
   }
 
   showPause(paused: boolean): void { this.pause.classList.toggle('hidden', !paused); }
+
+  showLeaderboard(track: TrackDefinition, entries: LeaderboardEntry[], loading = false, message = ''): void {
+    this.menu.classList.add('hidden');
+    this.pause.classList.add('hidden');
+    this.finish.classList.add('hidden');
+    this.hud.classList.add('hidden');
+    this.leaderboard.classList.remove('hidden');
+    this.leaderboardTitle.textContent = `${track.name} RANKING`;
+    this.leaderboard.querySelectorAll<HTMLButtonElement>('[data-leaderboard-track]').forEach((button) => {
+      button.classList.toggle('selected', button.dataset.leaderboardTrack === track.id);
+    });
+    this.leaderboardRows.replaceChildren();
+    if (loading || message || entries.length === 0) {
+      const notice = document.createElement('p');
+      notice.className = 'leaderboard-notice';
+      notice.textContent = loading ? 'LOADING RANKING…' : message || 'NO TIMES YET — SET THE FIRST RECORD.';
+      this.leaderboardRows.append(notice);
+      return;
+    }
+    entries.forEach((entry, index) => {
+      const row = document.createElement('div');
+      row.className = 'leaderboard-row';
+      const rank = document.createElement('b');
+      rank.textContent = String(index + 1).padStart(2, '0');
+      const name = document.createElement('span');
+      name.textContent = entry.nickname;
+      const time = document.createElement('time');
+      time.textContent = formatTime(entry.time);
+      row.append(rank, name, time);
+      this.leaderboardRows.append(row);
+    });
+  }
 
   showFinish(time: number, previousBest: number | null, newBest: boolean): void {
     this.finish.classList.remove('hidden');

@@ -3,6 +3,7 @@ import { AudioSystem } from '../audio/AudioSystem';
 import { CameraController } from '../camera/CameraController';
 import { CarController } from '../car/CarController';
 import { createCar } from '../car/CarVisual';
+import { LeaderboardClient } from '../profile/LeaderboardClient';
 import { ProfileStore } from '../profile/ProfileStore';
 import { GhostPlayer, GhostRecorder, GhostRun } from '../race/Ghost';
 import { Track, TrackDefinition, TRACKS } from '../track/Track';
@@ -13,6 +14,7 @@ type GameState = 'menu' | 'running' | 'paused' | 'finished';
 
 export class Game {
   private readonly profile = new ProfileStore();
+  private readonly leaderboard = new LeaderboardClient();
   private readonly hud: HUD;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.1, 2600);
@@ -39,6 +41,7 @@ export class Game {
   private cleanCombo = 0;
   private personalBest: GhostRun | null = null;
   private padBurst = 0;
+  private leaderboardRequest = 0;
 
   constructor(root: HTMLElement) {
     this.hud = new HUD(root, TRACKS);
@@ -67,6 +70,12 @@ export class Game {
       this.profile.rename(nickname);
       this.showMenu();
     };
+    this.hud.onLeaderboardOpen = () => { void this.showLeaderboard(this.selectedTrack); };
+    this.hud.onLeaderboardTrack = (trackId) => {
+      const definition = TRACKS.find((track) => track.id === trackId) ?? this.selectedTrack;
+      void this.showLeaderboard(definition);
+    };
+    this.hud.onLeaderboardClose = () => this.showMenu();
     addEventListener('resize', () => this.resize());
     addEventListener('pointerdown', () => this.audio.resume(), { once: true });
   }
@@ -204,6 +213,19 @@ export class Game {
     this.audio.update(0, false);
   }
 
+  private async showLeaderboard(track: TrackDefinition): Promise<void> {
+    const request = ++this.leaderboardRequest;
+    this.hud.showLeaderboard(track, [], true);
+    try {
+      const entries = await this.leaderboard.fetch(track.id);
+      if (request !== this.leaderboardRequest) return;
+      this.hud.showLeaderboard(track, entries);
+    } catch {
+      if (request !== this.leaderboardRequest) return;
+      this.hud.showLeaderboard(track, [], false, 'RANKING IS TEMPORARILY UNAVAILABLE.');
+    }
+  }
+
   private passCheckpoint(): void {
     const splitIndex = this.checkpoint;
     this.checkpoint += 1;
@@ -223,7 +245,16 @@ export class Game {
     const previous = this.personalBest?.time ?? null;
     const run = { time, frames: this.recorder.frames, splits: this.splitTimes };
     const newBest = this.profile.saveBest(this.selectedTrack.id, run);
-    if (newBest) this.personalBest = run;
+    if (newBest) {
+      this.personalBest = run;
+      const profile = this.profile.get();
+      void this.leaderboard.submit({
+        trackId: this.selectedTrack.id,
+        racerId: profile.id,
+        nickname: profile.nickname,
+        time,
+      }).catch(() => undefined);
+    }
     this.state = 'finished';
     this.hud.showFinish(time, previous, newBest);
     this.audio.beep(newBest ? 1040 : 820, 0.5);
