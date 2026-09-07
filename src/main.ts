@@ -29,8 +29,9 @@ type State = "menu" | "countdown" | "running" | "paused" | "finished";
 
 async function boot() {
   await RAPIER.init();
-  const view = new View($<HTMLCanvasElement>("world")),
-    input = new Input(),
+  const view = new View($<HTMLCanvasElement>("world"));
+  await view.ready;
+  const input = new Input(),
     audio = new Audio();
   let selected = 0,
     track: Track,

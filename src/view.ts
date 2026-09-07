@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import { WebGPURenderer } from "three/webgpu";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 import { racingFov } from './camera-fov.ts';
 import type { CameraMode } from './storage.ts';
 import RAPIER from "@dimforge/rapier3d-compat";
@@ -135,7 +139,12 @@ export class View {
       car.model.wing.visible=p.spoiler!==false;
     }
   }
-  readonly renderer: THREE.WebGLRenderer;
+  /**
+   * Uses WebGPU when the browser and GPU support it. Three's renderer retains
+   * a WebGL2 fallback so the game remains playable on unsupported browsers.
+   */
+  readonly renderer: WebGPURenderer;
+  readonly ready: Promise<void>;
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(65, 1, 0.1, 2200);
   readonly car = carModel();
@@ -143,34 +152,62 @@ export class View {
   readonly challengerGhost = carModel(true, 0xffa020);
   private challengerLabel: HTMLDivElement;
   private environment = new THREE.Group();
-  private sun = new THREE.DirectionalLight(0xfff2d5, 3.2);
-  private fill = new THREE.HemisphereLight(0xd5eaff, 0x667462, 2.2);
+  private sun = new THREE.DirectionalLight(0xffe1ba, 3.6);
+  private fill = new THREE.HemisphereLight(0x9bbde8, 0x080b10, 0.45);
+  private keyFill = new THREE.DirectionalLight(0xfff0dc, 0.38);
+  private keyFillTarget = new THREE.Object3D();
+  private rim = new THREE.DirectionalLight(0x9ec9ff, 1.25);
+  private rimTarget = new THREE.Object3D();
+  private studioEnvironment?: THREE.Texture;
+  private skybox?: THREE.Texture;
   private track!: Track;
   private center = new THREE.Vector3();
   private cameraHeading = new THREE.Vector3(0, 0, 1);
   private ghostIndex = 0;
   private challengerIndex = 0;
   private dust: THREE.InstancedMesh;
-  private dustData: { p: THREE.Vector3; life: number }[] = Array.from(
-    { length: 80 },
-    () => ({ p: new THREE.Vector3(), life: 0 }),
+  private dustData: {
+    p: THREE.Vector3;
+    velocity: THREE.Vector3;
+    age: number;
+    lifetime: number;
+    size: number;
+    seed: number;
+  }[] = Array.from(
+    { length: 220 },
+    () => ({
+      p: new THREE.Vector3(),
+      velocity: new THREE.Vector3(),
+      age: 99,
+      lifetime: 1,
+      size: 1,
+      seed: Math.random() * Math.PI * 2,
+    }),
   );
   private dustCursor = 0;
+  private dustEmission = 0;
+  private dustColor = new THREE.Color();
+  private contactShadow: THREE.Mesh;
+  private contactUp = new THREE.Vector3();
   private dummy = new THREE.Object3D();
   private shadowTarget = new THREE.Object3D();
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({
+    this.renderer = new WebGPURenderer({
       canvas,
       antialias: true,
       powerPreference: "high-performance",
     });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.7));
+    this.ready = this.renderer.init().then(() => {
+      this.createStudioEnvironment();
+      this.loadSkybox();
+    });
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = 0.95;
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.mapSize.set(4096, 4096);
     Object.assign(this.sun.shadow.camera, {
       left: -65,
       right: 65,
@@ -179,9 +216,11 @@ export class View {
       near: 0.1,
       far: 250,
     });
-    this.sun.shadow.normalBias = 0.12;
+    this.sun.shadow.normalBias = 0.055;
     this.sun.shadow.bias = -0.0001;
     this.sun.target = this.shadowTarget;
+    this.keyFill.target = this.keyFillTarget;
+    this.rim.target = this.rimTarget;
     this.challengerLabel = document.createElement("div");
     this.challengerLabel.className = "opponent-label ghost-opponent-label";
     this.challengerLabel.hidden = true;
@@ -190,26 +229,220 @@ export class View {
       this.sun,
       this.shadowTarget,
       this.fill,
+      this.keyFill,
+      this.keyFillTarget,
+      this.rim,
+      this.rimTarget,
       this.environment,
       this.car.group,
       this.ghost.group,
       this.challengerGhost.group,
     );
     this.dust = new THREE.InstancedMesh(
-      new THREE.IcosahedronGeometry(0.2, 0),
+      new THREE.PlaneGeometry(1, 1),
       new THREE.MeshBasicMaterial({
-        color: 0xc5d0ce,
+        color: 0xd5dbd9,
+        map: this.createSmokeTexture(),
         transparent: true,
-        opacity: 0.22,
+        opacity: 0.34,
         depthWrite: false,
+        side: THREE.DoubleSide,
       }),
-      80,
+      this.dustData.length,
     );
     this.dust.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.dust.frustumCulled = false;
     this.scene.add(this.dust);
+    const contactGeometry = new THREE.PlaneGeometry(1, 1);
+    contactGeometry.rotateX(-Math.PI / 2);
+    this.contactShadow = new THREE.Mesh(
+      contactGeometry,
+      new THREE.MeshBasicMaterial({
+        color: 0x05070a,
+        map: this.createContactShadowTexture(),
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      }),
+    );
+    this.contactShadow.renderOrder = 1;
+    this.scene.add(this.contactShadow);
     this.resize();
     window.addEventListener("resize", () => this.resize());
+    this.loadPlayerCar();
+  }
+  private createStudioEnvironment() {
+    // Use the procedural map only while the real, photographed HDRI streams.
+    // It keeps the bodywork lit during loading and is replaced immediately.
+    this.createFallbackStudioEnvironment();
+    new RGBELoader().load(
+      "/hdr/studio-small-09-1k.hdr",
+      (texture) => {
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        this.studioEnvironment?.dispose();
+        this.studioEnvironment = texture;
+        this.scene.environment = texture;
+        this.scene.environmentIntensity = 0.9;
+      },
+      undefined,
+      (error) => console.warn("Studio HDRI could not be loaded", error),
+    );
+  }
+  private loadSkybox() {
+    new THREE.TextureLoader().load(
+      "/sky/hazy-afternoon-2k.png",
+      (texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        this.skybox = texture;
+        this.scene.background = texture;
+      },
+      undefined,
+      (error) => console.warn("Hazy afternoon skybox could not be loaded", error),
+    );
+  }
+  private createFallbackStudioEnvironment() {
+    // A static cubemap gives the GT3's dark clear coat the long, clean
+    // softbox reflections seen in an automotive studio. Unlike a PMREM scene
+    // capture, this uses only standard texture sampling and is reliable on
+    // Three's WebGPU renderer.
+    const makeFace = (index: number) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 512;
+      const context = canvas.getContext("2d")!;
+      const base = context.createLinearGradient(0, 0, 0, 512);
+      base.addColorStop(0, "#2a303a");
+      base.addColorStop(0.46, "#11151c");
+      base.addColorStop(1, "#05070b");
+      context.fillStyle = base;
+      context.fillRect(0, 0, 512, 512);
+
+      // Ceiling panel plus side strips. Different placements per cube face
+      // keep the reflections from looking like a flat colour wash.
+      const panel = (x: number, y: number, width: number, height: number, color: string) => {
+        const glow = context.createLinearGradient(x, y, x + width, y + height);
+        glow.addColorStop(0, color);
+        glow.addColorStop(0.42, "rgba(255,255,255,0.82)");
+        glow.addColorStop(1, "rgba(118,158,218,0.08)");
+        context.fillStyle = glow;
+        context.fillRect(x, y, width, height);
+      };
+      if (index === 2) panel(42, 118, 428, 108, "rgba(255,238,210,0.96)");
+      else if (index === 3) panel(80, 320, 352, 52, "rgba(42,60,86,0.45)");
+      else {
+        panel(index % 2 ? 365 : 58, 50, 74, 390, index < 2 ? "rgba(185,214,255,0.92)" : "rgba(255,220,178,0.9)");
+        panel(index % 2 ? 94 : 340, 166, 42, 205, "rgba(255,255,255,0.45)");
+      }
+      return canvas;
+    };
+    this.studioEnvironment = new THREE.CubeTexture(
+      [0, 1, 2, 3, 4, 5].map(makeFace),
+    );
+    this.studioEnvironment.colorSpace = THREE.SRGBColorSpace;
+    this.studioEnvironment.mapping = THREE.CubeReflectionMapping;
+    this.studioEnvironment.needsUpdate = true;
+    this.scene.environment = this.studioEnvironment;
+    this.scene.environmentIntensity = 0.8;
+  }
+  private createSmokeTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 256;
+    const context = canvas.getContext("2d")!;
+    context.clearRect(0, 0, 256, 256);
+    // Overlapping soft blobs prevent the hard, round look of basic particles.
+    for (let i = 0; i < 26; i++) {
+      const angle = (i / 26) * Math.PI * 2;
+      const radius = 16 + ((i * 37) % 48);
+      const x = 128 + Math.cos(angle) * radius * 0.52;
+      const y = 128 + Math.sin(angle) * radius * 0.52;
+      const blob = context.createRadialGradient(x, y, 0, x, y, 62 + (i % 4) * 9);
+      blob.addColorStop(0, "rgba(255,255,255,0.18)");
+      blob.addColorStop(0.42, "rgba(255,255,255,0.07)");
+      blob.addColorStop(1, "rgba(255,255,255,0)");
+      context.fillStyle = blob;
+      context.fillRect(0, 0, 256, 256);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+  private createContactShadowTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 256;
+    const context = canvas.getContext("2d")!;
+    const shadow = context.createRadialGradient(128, 128, 10, 128, 128, 126);
+    shadow.addColorStop(0, "rgba(0,0,0,0.9)");
+    shadow.addColorStop(0.42, "rgba(0,0,0,0.58)");
+    shadow.addColorStop(0.76, "rgba(0,0,0,0.16)");
+    shadow.addColorStop(1, "rgba(0,0,0,0)");
+    context.fillStyle = shadow;
+    context.fillRect(0, 0, 256, 256);
+    return new THREE.CanvasTexture(canvas);
+  }
+  private loadPlayerCar() {
+    const loader = new GLTFLoader();
+    loader.setMeshoptDecoder(MeshoptDecoder);
+    loader.load(
+      "/models/porsche-992-gt3-r.meshopt.glb",
+      (gltf) => {
+        const porsche = gltf.scene;
+
+        // Sketchfab exports this asset in centimetres. Match it to the
+        // existing Rapier chassis without changing the driving physics.
+        // Deliberately oversized slightly: the player car should have the
+        // prominent, planted third-person presence of a modern arcade racer.
+        porsche.scale.setScalar(134.4);
+        // The physics chassis sits ~0.82 units above the road at rest. Align
+        // the imported tyre contact patch to it rather than its visual centre.
+        porsche.position.y = -0.74;
+        porsche.traverse((object) => {
+          if (!(object instanceof THREE.Mesh)) return;
+          object.castShadow = true;
+          object.receiveShadow = true;
+          const materials = Array.isArray(object.material)
+            ? object.material
+            : [object.material];
+          materials.forEach((material) => {
+            if (!(material instanceof THREE.MeshStandardMaterial)) return;
+            // Preserve the GT3 R livery while giving its clear coat, carbon
+            // fibre, and metalwork a richer response to track lighting.
+            material.envMapIntensity = 1.25;
+            material.roughness = Math.max(0.2, material.roughness * 0.96);
+            material.metalness = Math.min(1, material.metalness + 0.02);
+            if (material instanceof THREE.MeshPhysicalMaterial) {
+              material.clearcoat = Math.max(material.clearcoat, 0.32);
+              material.clearcoatRoughness = Math.min(
+                material.clearcoatRoughness,
+                0.28,
+              );
+            }
+            [
+              material.map,
+              material.normalMap,
+              material.roughnessMap,
+              material.metalnessMap,
+              material.aoMap,
+              material.emissiveMap,
+            ].forEach((texture) => {
+              if (!texture) return;
+              texture.anisotropy = 8;
+              texture.needsUpdate = true;
+            });
+            material.needsUpdate = true;
+          });
+        });
+
+        // Keep the simple vehicle only as a loading/fallback silhouette. The
+        // imported Porsche becomes the actual player-facing vehicle.
+        this.car.group.children.forEach((child) => (child.visible = false));
+        this.car.group.add(porsche);
+      },
+      undefined,
+      (error) => console.warn("Porsche GT3 R model could not be loaded", error),
+    );
   }
   resize() {
     this.renderer.setSize(innerWidth, innerHeight, false);
@@ -217,8 +450,10 @@ export class View {
     this.camera.updateProjectionMatrix();
   }
   quality(high: boolean) {
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, high ? 1.7 : 1));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, high ? 2 : 1));
     this.renderer.shadowMap.enabled = high;
+    this.sun.shadow.mapSize.set(high ? 4096 : 1024, high ? 4096 : 1024);
+    this.sun.shadow.needsUpdate = true;
     this.resize();
   }
   load(track: Track, world: RAPIER.World) {
@@ -246,10 +481,12 @@ export class View {
     const night = track.course.id.includes("pulse"),
       accent = track.course.color,
       h = track.course.width / 2;
-    this.scene.background = new THREE.Color(track.course.sky);
+    if (!this.skybox) this.scene.background = new THREE.Color(track.course.sky);
     this.scene.fog = new THREE.Fog(track.course.sky, 220, 1250);
-    this.fill.intensity = night ? 1.7 : 2.2;
-    this.sun.intensity = night ? 1.3 : 3.2;
+    this.fill.intensity = night ? 0.25 : 0.45;
+    this.sun.intensity = night ? 2.1 : 4.7;
+    this.keyFill.intensity = night ? 0.16 : 0.38;
+    this.rim.intensity = night ? 0.95 : 1.55;
     this.center.copy(
       new THREE.Box3()
         .setFromPoints(track.samples.map((s) => s.p))
@@ -430,7 +667,8 @@ export class View {
       this.environment.add(g);
     }
     this.ghost.group.visible = false;
-    this.dustData.forEach((d) => (d.life = 0));
+    this.dustData.forEach((d) => (d.age = d.lifetime));
+    this.dustEmission = 0;
   }
   private gate(t: number, text: string, color: string, world: RAPIER.World) {
     const s = this.track.sample(t),
@@ -484,8 +722,8 @@ export class View {
     this.cameraHeading.set(0, 0, 1).applyQuaternion(vehicle.rotation);
     this.camera.position
       .copy(vehicle.position)
-      .addScaledVector(this.cameraHeading, -7.4)
-      .add(new THREE.Vector3(0, 3.15, 0));
+      .addScaledVector(this.cameraHeading, -5.8)
+      .add(new THREE.Vector3(0, 2.05, 0));
     this.camera.fov = 72;
     this.ghostIndex = 0;
     this.challengerIndex = 0;
@@ -508,6 +746,16 @@ export class View {
       .copy(vehicle.previousRotation)
       .slerp(vehicle.rotation, alpha);
     this.car.group.visible = menu || this.cameraMode !== 'bumper';
+    this.contactShadow.visible = !menu && vehicle.grounded > 0;
+    if (this.contactShadow.visible) {
+      this.contactUp.set(0, 1, 0).applyQuaternion(this.car.group.quaternion);
+      this.contactShadow.position
+        .copy(p)
+        .addScaledVector(this.contactUp, -0.807);
+      this.contactShadow.quaternion.copy(this.car.group.quaternion);
+      const speedStretch = 1 + Math.min(0.16, vehicle.speed * 0.0015);
+      this.contactShadow.scale.set(3.05, 6.35 * speedStretch, 1);
+    }
     this.car.wheels.forEach((wheel, i) => {
       wheel.position.y = -(vehicle.controller.wheelSuspensionLength(i) ?? 0.3);
       wheel.rotation.set(0, i < 2 ? vehicle.steering : 0, 0);
@@ -549,17 +797,25 @@ export class View {
       const top = this.cameraMode === 'top';
       const desired = p
         .clone()
-        .addScaledVector(this.cameraHeading, top ? -10 : -7.4 - vehicle.speed * 0.002)
-        .add(new THREE.Vector3(0, top ? 28 : 3.15, 0));
+        .addScaledVector(
+          this.cameraHeading,
+          top ? -10 : -5.8,
+        )
+        .add(new THREE.Vector3(0, top ? 28 : 2.05, 0));
       if(this.cameraCut)this.camera.position.copy(desired);
       else this.camera.position.lerp(desired, 1 - Math.exp(-12 * dt));
       this.camera.lookAt(
         p
           .clone()
           .addScaledVector(this.cameraHeading, 9)
-          .add(new THREE.Vector3(0, 0.8, 0)),
+          .add(new THREE.Vector3(0, 0.35, 0)),
       );
-      const targetFov = top ? 54 + Math.min(8,vehicle.speed*.035) : racingFov(vehicle.speed,vehicle.turbo);
+      const targetFov = top
+        ? 54 + Math.min(8, vehicle.speed * 0.035)
+        : Math.min(
+            70,
+            Math.max(70, racingFov(vehicle.speed, vehicle.turbo) - 2),
+          );
       this.camera.fov = this.cameraCut ? targetFov : THREE.MathUtils.damp(
         this.camera.fov,
         targetFov,
@@ -572,6 +828,10 @@ export class View {
     const focus = menu ? this.center : p;
     this.shadowTarget.position.copy(focus);
     this.sun.position.copy(focus).add(new THREE.Vector3(-55, 110, 35));
+    this.keyFillTarget.position.copy(focus);
+    this.keyFill.position.copy(focus).add(new THREE.Vector3(-24, 30, -38));
+    this.rimTarget.position.copy(focus);
+    this.rim.position.copy(focus).add(new THREE.Vector3(42, 28, -52));
     this.ghost.group.visible = !menu && !!record && time <= record.time;
     if (this.ghost.group.visible && record) {
       if (
@@ -661,28 +921,70 @@ export class View {
     } else {
       this.challengerLabel.hidden = true;
     }
-    if (
-      !menu &&
-      vehicle.grounded >= 2 &&
-      Math.abs(vehicle.slip) > 0.09 &&
-      vehicle.speed > 35
-    ) {
-      for (const x of [-0.85, 0.85]) {
-        const d = this.dustData[this.dustCursor++ % 80];
-        d.p.set(x, -0.4, -1.15).applyQuaternion(vehicle.rotation).add(p);
-        d.life = 0.8;
+    const smokeLoad = THREE.MathUtils.clamp(
+      (Math.abs(vehicle.slip) - 0.06) / 0.28,
+      0,
+      1,
+    ) * THREE.MathUtils.clamp((vehicle.speed - 24) / 38, 0, 1);
+    if (!menu && vehicle.grounded >= 2 && smokeLoad > 0) {
+      // Emit at a rate, rather than once per render frame, so the cloud's
+      // volume stays consistent at every frame rate.
+      this.dustEmission += dt * (8 + smokeLoad * 58);
+      const side = new THREE.Vector3(1, 0, 0).applyQuaternion(vehicle.rotation);
+      const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(vehicle.rotation);
+      while (this.dustEmission >= 1) {
+        this.dustEmission -= 1;
+        const d = this.dustData[this.dustCursor++ % this.dustData.length];
+        const wheelSide = this.dustCursor % 2 ? -0.88 : 0.88;
+        const jitter = (Math.random() - 0.5) * 0.28;
+        d.p
+          .set(wheelSide, -0.42, -1.35)
+          .applyQuaternion(vehicle.rotation)
+          .add(p)
+          .addScaledVector(side, jitter);
+        // Smoke starts with a fraction of the car's velocity, then loses
+        // momentum and is advected sideways/upward by a small turbulent field.
+        d.velocity.copy(vehicle.velocity).multiplyScalar(0.12 + smokeLoad * 0.1);
+        d.velocity.addScaledVector(side, (Math.random() - 0.5) * (1.5 + smokeLoad * 3));
+        d.velocity.addScaledVector(forward, -0.5 - Math.random() * 0.9);
+        d.velocity.y = 0.45 + smokeLoad * 0.95 + Math.random() * 0.3;
+        d.age = 0;
+        d.lifetime = 1.9 + smokeLoad * 1.25 + Math.random() * 0.55;
+        d.size = 0.72 + smokeLoad * 0.7 + Math.random() * 0.35;
       }
-    }
+    } else this.dustEmission = Math.max(0, this.dustEmission - dt * 8);
     this.dustData.forEach((d, i) => {
-      d.life = Math.max(0, d.life - dt);
-      d.p.y += dt * 0.6;
+      d.age += dt;
+      const progress = d.age / d.lifetime;
+      if (progress < 1) {
+        const turbulence = 0.45 + progress * 1.1;
+        d.velocity.x += Math.sin(time * 1.7 + d.seed + d.p.z * 0.12) * turbulence * dt;
+        d.velocity.z += Math.cos(time * 1.3 + d.seed + d.p.x * 0.12) * turbulence * dt;
+        d.velocity.y += (0.13 + progress * 0.28) * dt;
+        d.velocity.multiplyScalar(Math.exp(-1.35 * dt));
+        d.p.addScaledVector(d.velocity, dt);
+      }
+      const fade = progress < 0.74
+        ? 1
+        : 1 - THREE.MathUtils.smoothstep(progress, 0.74, 1);
+      const scale = progress < 1
+        ? d.size * (0.35 + progress * 4.6) * fade
+        : 0;
       this.dummy.position.copy(d.p);
-      this.dummy.rotation.set(0, 0, 0);
-      this.dummy.scale.setScalar(d.life > 0 ? (1 - d.life) * 2 : 0);
+      this.dummy.quaternion.copy(this.camera.quaternion);
+      this.dummy.rotateZ(Math.sin(d.seed + progress * 3) * 0.45);
+      this.dummy.scale.set(scale * 1.25, scale, 1);
       this.dummy.updateMatrix();
       this.dust.setMatrixAt(i, this.dummy.matrix);
+      this.dustColor.setRGB(
+        0.62 + (1 - Math.min(1, progress)) * 0.22,
+        0.66 + (1 - Math.min(1, progress)) * 0.2,
+        0.66 + (1 - Math.min(1, progress)) * 0.18,
+      );
+      this.dust.setColorAt(i, this.dustColor);
     });
     this.dust.instanceMatrix.needsUpdate = true;
+    if (this.dust.instanceColor) this.dust.instanceColor.needsUpdate = true;
     for (const opponent of this.opponents.values()) {
       opponent.model.group.visible = !menu;
       opponent.model.group.position.lerp(opponent.p, 1 - Math.exp(-18 * dt));

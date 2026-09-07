@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { settings } from "./storage.ts";
 
 // Original, synthesized music. No downloaded recordings or external audio assets.
@@ -5,8 +6,12 @@ export class Audio {
   private ctx?: AudioContext;
   private music?: GainNode;
   private sfx?: GainNode;
-  private engine?: OscillatorNode;
   private engineGain?: GainNode;
+  private engineFilter?: BiquadFilterNode;
+  private engineSources: AudioBufferSourceNode[] = [];
+  private engineLayers: GainNode[] = [];
+  private engineReady?: Promise<void>;
+  private rpm = 900;
   private timer?: number;
   private step = 0;
   private next = 0;
@@ -20,22 +25,53 @@ export class Audio {
       compressor.connect(this.ctx.destination);
       this.music.connect(compressor);
       this.sfx.connect(compressor);
-      this.engine = this.ctx.createOscillator();
-      this.engine.type = "sawtooth";
       this.engineGain = this.ctx.createGain();
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = "lowpass";
-      filter.frequency.value = 280;
-      this.engine.connect(filter);
-      filter.connect(this.engineGain);
+      this.engineFilter = this.ctx.createBiquadFilter();
+      this.engineFilter.type = "lowpass";
+      this.engineFilter.frequency.value = 700;
+      this.engineFilter.Q.value = 0.8;
+      this.engineFilter.connect(this.engineGain);
       this.engineGain.connect(this.sfx);
       this.engineGain.gain.value = 0;
-      this.engine.start();
+      this.engineReady = this.loadEngineLoops();
       this.next = this.ctx.currentTime + 0.08;
       this.timer = window.setInterval(() => this.schedule(), 80);
     }
+    await this.engineReady;
     await this.ctx.resume();
     this.volumes();
+  }
+  private async loadEngineLoops() {
+    try {
+      // The supplied loops are separate engine characters, not RPM layers.
+      // Use the longest loop as one strong engine voice and move it through
+      // the rev range solely with pitch and filtering.
+      const response = await fetch("/audio/engine-loop-0.wav");
+      if (!response.ok) throw new Error("engine loop failed to load");
+      this.createEngineLayers([
+        await this.ctx!.decodeAudioData(await response.arrayBuffer()),
+      ]);
+    } catch (error) {
+      console.warn("Engine sound loops could not be loaded", error);
+    }
+  }
+  private createEngineLayers(buffers: AudioBuffer[]) {
+    if (!this.ctx || !this.engineFilter || this.engineSources.length) return;
+    const now = this.ctx.currentTime;
+    buffers.forEach((buffer) => {
+      const source = this.ctx!.createBufferSource();
+      const gain = this.ctx!.createGain();
+      source.buffer = buffer;
+      source.loop = true;
+      source.loopStart = 0;
+      source.loopEnd = buffer.duration;
+      gain.gain.setValueAtTime(0, now);
+      source.connect(gain);
+      gain.connect(this.engineFilter!);
+      source.start(now);
+      this.engineSources.push(source);
+      this.engineLayers.push(gain);
+    });
   }
   volumes() {
     if (this.ctx) {
@@ -55,18 +91,29 @@ export class Audio {
     void this.ctx?.suspend();
   }
   drive(speed: number, gas: number, slip: number) {
-    if (this.ctx && this.engine) {
-      this.engine.frequency.setTargetAtTime(
-        40 + (speed % 55) * 1.1 + speed * 0.28,
+    if (this.ctx && this.engineGain && this.engineFilter && this.engineLayers.length) {
+      const throttle = Math.max(0, gas);
+      // The physics model has no transmission, so create a compact six-speed
+      // RPM model from road speed. It drives the pitch of one engine loop.
+      const gear = speed < 8 ? 1 : Math.min(6, Math.floor((speed - 8) / 34) + 1);
+      const gearSpeed = Math.max(0, speed - 8 - (gear - 1) * 34);
+      const gearProgress = THREE.MathUtils.clamp(gearSpeed / 34, 0, 1);
+      const targetRpm = 920 + gearProgress * 6750 * (0.58 + throttle * 0.42);
+      this.rpm += (targetRpm - this.rpm) * 0.11;
+
+      this.engineLayers[0].gain.setTargetAtTime(1, this.ctx.currentTime, 0.04);
+      this.engineSources[0].playbackRate.setTargetAtTime(
+        THREE.MathUtils.clamp(0.78 + ((this.rpm - 900) / 6750) * 0.72, 0.78, 1.5),
         this.ctx.currentTime,
-        0.07,
+        0.055,
+      );
+      this.engineFilter.frequency.setTargetAtTime(
+        750 + this.rpm * 0.82 + throttle * 950,
+        this.ctx.currentTime,
+        0.08,
       );
       this.engineGain!.gain.setTargetAtTime(
-        gas === 0 && speed < 2
-          ? 0
-          : 0.016 +
-              Math.abs(gas) * 0.025 +
-              Math.min(0.018, Math.abs(slip) * 0.02),
+        0.2 + throttle * 0.26 + Math.min(0.08, Math.abs(slip) * 0.14),
         this.ctx.currentTime,
         0.12,
       );
@@ -159,6 +206,7 @@ export class Audio {
   }
   dispose() {
     if (this.timer) clearInterval(this.timer);
+    this.engineSources.forEach((source) => source.stop());
     void this.ctx?.close();
   }
 }
